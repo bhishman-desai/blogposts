@@ -1,0 +1,116 @@
+---
+title: 'Lightweight Database Management System: Step-by-step Guide'
+date: '2024-04-18'
+tags: ['lightweight', 'custom' ,'dbms']
+---
+
+Hey, code fans!
+
+We all know MySQL is great, but what if I told you we can make our own simple database management system? Yes, you
+heard right. This blog is all about making a DBMS with our own changes, starting from scratch.
+
+## First things first
+
+Building a custom database can be a tricky business. If we dive in without a plan, we might find ourselves tangled
+in a web of messy code that’s not only inefficient but also becomes a nightmare to manage as we move forward.
+
+So, how do we steer clear of this chaos? The answer is simple - by starting with a solid design for our classes and
+setting up clear relationships between them. To give you a bird’s eye view of the whole setup, here’s a class
+diagram that lays out the entire structure of the application. This should give you a good sense of how all the
+pieces fit together.
+
+[![UML.png](https://i.postimg.cc/pXzVQtKv/UML.png)](https://postimg.cc/cr1NZ2Dk)
+
+
+
+## Breaking Down the Database Management System
+
+Our database management system is divided into three key processes:
+
+- Parsing: This is where we handle the parsing of the query and validate its syntax. It's all about making sure the 
+  query is well-formed and ready to go. 
+- Executing: Next up is the execution phase. Here, we bifurcate the query based on its type and make the appropriate 
+  call to the database. 
+- Fetching: Finally, we have the fetching process. This is where we retrieve the data from the database (in our case, 
+  files) and deliver it to the end user.
+
+And there you have it! A clear, easy-to-follow breakdown of our database management system.
+
+
+
+## Working of the Database (the interesting part)
+### Database Application Overview
+
+Our application uses a file storage system for the database. Here's a closer look at its structure and functionality.
+
+### File Structure
+
+The database consists of three types of files:
+
+#### 1. users.csv
+
+This file holds all the user data, including details of existing users. When a new user is added to the database, their information is stored here. This file is critical as all user logins are handled using it.
+
+#### 2. database.log
+
+This file records all the activities in the database. It tracks the operations performed and the user who is currently logged in and performing these operations.
+
+#### 3. Table-specific files
+
+When a table is created in the system, a corresponding file with the same name as the table is created. This file stores all the information related to that table.
+
+### Custom Delimiter
+
+The system uses a custom delimiter `-_-` for serializing and deserializing the files in the database. This unique delimiter helps in accurately reading and writing data to and from the files.
+
+### Supported Commands
+
+The application supports the following DDL and DML commands:
+```sql
+-- CREATE TABLE
+create table <table_name> (<column_name>, <column_name>);
+
+-- CREATE USER
+create user <username> identified by <password>;
+       
+-- SELECT 
+select * from <table_name>;
+-- or 
+select <column_name> from <table_name>; 
+-- or 
+select <column_name> from <table_name> where <condition>;
+
+-- INSERT
+insert into <table_name> values (value, value), (value, value), (value, value);
+
+```
+
+### Transaction Support
+
+The database also supports transactions and ensures ACID properties. Here are the transaction-related commands:
+
+- `BEGIN TRANSACTION`: This command starts a new transaction.
+- `END TRANSACTION`: This command ends a transaction.
+- `COMMIT`: This command saves the queries in the transaction to the file.
+- `ROLLBACK`: This command discards all changes made by queries and restores the previous consistent state of the database.
+
+### Novelty
+
+In our quest for continuous improvement, we've implemented a feature that measures the execution time of each query in milliseconds. This is our very own profiling tool that provides valuable insights into the performance of each query.
+
+With this tool, we can identify bottlenecks and optimize the system for better performance. It's like having a microscope that lets us zoom in on any performance issues and address them effectively. So, here's to a faster, more efficient database system!
+
+# NOTE:
+
+Just a quick heads up! When you're logging into the database for the very first time, you'll need to use the root user credentials. Here they are:
+
+- **User ID**: `1`
+- **Password**: `admin`
+
+Don't worry, this is just for the first time. 🙌
+
+Once you're in, you can go ahead and create your own user profile. From then on, you can use your own credentials. It's as simple as that! 😄
+
+Link to the [Source Code.](https://github.com/bhishman-desai/lightweight-dbms)
+
+Happy coding! :))
