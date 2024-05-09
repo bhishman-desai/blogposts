@@ -1,0 +1,531 @@
+---
+title: 'ExtractGen: Text Extraction and Conversion to CSV using AWS Services'
+date: '2024-05-10'
+tags: ['cloud', 'aws']
+---
+
+Welcome to my latest blog post! 🎉 Today, we’re going to dive into an exciting project that transforms unstructured data into structured data. If you’ve ever been overwhelmed by the amount of information in a multi-page PDF and wished there was an easier way to analyze it, this post is for you! 📚➡️🔍
+
+We’ll be exploring how to extract text from PDF files and store it as key-value pairs in a CSV file using AWS services. This process will allow us to easily manipulate and analyze the data. We’ll also get our hands dirty by setting up an S3 bucket, understanding the role of various Lambda functions, and even provisioning AWS resources using a CloudFormation script. 🚀
+
+<Video id="wTmT9deo9dU" />
+
+
+### Project Introduction 🎉
+This project is designed to extract text from multi-page PDF files and store the extracted data as key-value pairs in a CSV file. The primary functionality is to convert unstructured data (text in PDF files) into structured data (CSV files), which can be easily manipulated and analyzed.
+
+### Getting Started and Getting Hands Dirty 🚀
+
+#### Part 1: Creating an S3 Bucket and Uploading Source Code 📦
+To get started, you'll need to create an S3 bucket to upload the source code which will be used during the automated provisioning of the AWS resources. You can find the zip files to upload in the resources folder of my [GitHub repository](https://github.com/bhishman-desai/extractgen). These zip files mainly include source code for my frontend application and source code for all lambda functions used in the application.
+
+
+Please refer to the official AWS documentation on [Creating a Bucket](https://docs.aws.amazon.com/AmazonS3/latest/userguide/creating-bucket.html) for detailed steps.
+
+#### Part 2: Describing Each Lambda Function and Providing Source Code 📝
+##### Text Detection Lambda
+The overall purpose of this code is to extract text from pdf uploaded to S3 bucket using AWS Textract, and then notify an SNS topic about the job status. The extracted text is stored in the same S3 bucket.
+
+```python
+import os
+import json
+import boto3
+from urllib.parse import unquote_plus
+
+# Environment variables
+OUTPUT_BUCKET_NAME = os.environ["OUTPUT_BUCKET_NAME"]
+OUTPUT_S3_PREFIX = os.environ["OUTPUT_S3_PREFIX"]
+SNS_TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
+SNS_ROLE_ARN = os.environ["SNS_ROLE_ARN"]
+
+def lambda_handler(event, context):
+    """Main Lambda handler triggered by S3 event."""
+    try:
+        # Initialize AWS clients
+        textract = boto3.client("textract")
+        sns = boto3.client("sns")
+
+        # Check if event is not empty
+        if event:
+            # Extract bucket name and file name from the event
+            file_obj = event["Records"][0]
+            bucket_name = str(file_obj["s3"]["bucket"]["name"])
+            file_name = unquote_plus(str(file_obj["s3"]["object"]["key"]))
+
+            print(f"Bucket: {bucket_name} ::: Key: {file_name}")
+
+            # Start Textract job
+            textract_response = textract.start_document_text_detection(
+                DocumentLocation={"S3Object": {"Bucket": bucket_name, "Name": file_name}},
+                OutputConfig={"S3Bucket": OUTPUT_BUCKET_NAME, "S3Prefix": OUTPUT_S3_PREFIX},
+            )
+
+            # Check if Textract job was started successfully
+            if textract_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
+                print("Textract job created successfully!")
+
+                # Publish a message to the SNS topic with the Textract response
+                sns.publish(
+                    TopicArn=SNS_TOPIC_ARN,
+                    Message=json.dumps(textract_response),
+                    Subject='Textract Job Created'
+                )
+
+                return {"statusCode": 200, "body": json.dumps("Job created and SNS message sent successfully!")}
+            else:
+                return {"statusCode": 500, "body": json.dumps("Job creation failed!")}
+    except Exception as e:
+        # Handle the exception
+        error_message = f"An error occurred: {str(e)}"
+        print(error_message)
+        return {"statusCode": 500, "body": json.dumps(error_message)}
+```
+
+Once the Textract job is completed, this lambda sends SNS to another lambda which is CSV generator lambda.
+
+##### CSV Generator Lambda
+The overall purpose of this function is to process the response of a Textract job, prepare a CSV file with the extracted text, and upload the CSV file to the S3 bucket.
+
+```python
+import os
+import json
+import boto3
+from urllib.parse import unquote_plus
+
+# Environment variables
+OUTPUT_BUCKET_NAME = os.environ["OUTPUT_BUCKET_NAME"]
+OUTPUT_S3_PREFIX = os.environ["OUTPUT_S3_PREFIX"]
+SNS_TOPIC_ARN = os.environ["SNS_TOPIC_ARN"]
+SNS_ROLE_ARN = os.environ["SNS_ROLE_ARN"]
+
+def lambda_handler(event, context):
+    """Main Lambda handler triggered by S3 event."""
+    try:
+        # Initialize AWS clients
+        textract = boto3.client("textract")
+        sns = boto3.client("sns")
+
+        # Check if event is not empty
+        if event:
+            # Extract bucket name and file name from the event
+            file_obj = event["Records"][0]
+            bucket_name = str(file_obj["s3"]["bucket"]["name"])
+            file_name = unquote_plus(str(file_obj["s3"]["object"]["key"]))
+
+            print(f"Bucket: {bucket_name} ::: Key: {file_name}")
+
+            # Start Textract job
+            textract_response = textract.start_document_text_detection(
+                DocumentLocation={"S3Object": {"Bucket": bucket_name, "Name": file_name}},
+                OutputConfig={"S3Bucket": OUTPUT_BUCKET_NAME, "S3Prefix": OUTPUT_S3_PREFIX},
+            )
+
+            # Check if Textract job was started successfully
+            if textract_response["ResponseMetadata"]["HTTPStatusCode"] == 200:
+                print("Textract job created successfully!")
+
+                # Publish a message to the SNS topic with the Textract response
+                sns.publish(
+                    TopicArn=SNS_TOPIC_ARN,
+                    Message=json.dumps(textract_response),
+                    Subject='Textract Job Created'
+                )
+
+                return {"statusCode": 200, "body": json.dumps("Job created and SNS message sent successfully!")}
+            else:
+                return {"statusCode": 500, "body": json.dumps("Job creation failed!")}
+    except Exception as e:
+        # Handle the exception
+        error_message = f"An error occurred: {str(e)}"
+        print(error_message)
+        return {"statusCode": 500, "body": json.dumps(error_message)}
+```
+
+##### CSV Download Lambda
+The overall purpose of this code is to provide pre-signed URLs for downloading CSV files from an S3 bucket.
+
+
+```python
+import boto3
+import os
+import json
+
+def lambda_handler(event, context):
+    s3 = boto3.client('s3')
+    bucket_name = os.environ['OUTPUT_BUCKET_NAME']
+    folder_name = 'csv/'
+
+    try:
+        response = s3.list_objects_v2(Bucket=bucket_name, Prefix=folder_name)
+        if 'Contents' in response:
+            files = [file['Key'] for file in response['Contents'] if file['Key'].endswith('.csv')]
+            if files:
+                urls = [s3.generate_presigned_url('get_object', Params={'Bucket': bucket_name, 'Key': file}) for file in files]
+                return {
+                    'isBase64Encoded': False,
+                    'statusCode': 200,
+                    'headers': { 'Content-Type': 'application/json' },
+                    'body': json.dumps(urls)
+                }
+            else:
+                return {
+                    'isBase64Encoded': False,
+                    'statusCode': 200,
+                    'headers': { 'Content-Type': 'application/json' },
+                    'body': json.dumps('No CSV files found.')
+                }
+        else:
+            return {
+                'isBase64Encoded': False,
+                'statusCode': 200,
+                'headers': { 'Content-Type': 'application/json' },
+                'body': json.dumps('Download not ready yet.')
+            }
+    except Exception as e:
+        return {
+            'isBase64Encoded': False,
+            'statusCode': 500,
+            'headers': { 'Content-Type': 'application/json' },
+            'body': json.dumps('Error: ' + str(e))
+        }
+```
+
+#### Part 3: Explaining the CloudFormation Script and Provisioning on AWS ☁️
+In this part, I will explain my CloudFormation script. You can find the source code for the file below:
+
+
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Asynchronous Text detection from multi-page pdf via Textract by Bhishman Desai
+
+
+Parameters:
+    RoleArn:
+        Description: Existing IAM role ARN
+        Type: String
+        Default: arn:aws:iam::712922208151:role/LabRole
+
+
+Resources:
+# Compute
+    TextDetectionLambda:
+        Type: AWS::Lambda::Function
+        Properties:
+            Handler: lambda_function.lambda_handler
+            Runtime: python3.9
+            Role: !Ref RoleArn
+            Environment:
+                Variables:
+                    OUTPUT_BUCKET_NAME: !Sub '${AWS::StackName}-${AWS::Region}-${AWS::AccountId}'
+                    OUTPUT_S3_PREFIX: 'output'
+                    SNS_TOPIC_ARN: !Ref TextExtractSNSTopic
+                    SNS_ROLE_ARN: !Ref RoleArn
+            Code:
+                S3Bucket: term-end-code
+                S3Key: response_generator.zip
+
+    CSVGeneratorLambda:
+        Type: AWS::Lambda::Function
+        Properties:
+            Handler: lambda_function.lambda_handler
+            Runtime: python3.9
+            Timeout: 900
+            Role: !Ref RoleArn
+            Layers:
+                - !Ref PandasLayer
+            Environment:
+                Variables:
+                    BUCKET_NAME: !Sub '${AWS::StackName}-${AWS::Region}-${AWS::AccountId}'
+                    PREFIX: 'csv'
+            Code:
+                S3Bucket: term-end-code
+                S3Key: csv_generator.zip
+
+    CsvDownloadLambda:
+        Type: AWS::Lambda::Function
+        Properties:
+            Handler: lambda_function.lambda_handler
+            Runtime: python3.9
+            Role: !Ref RoleArn
+            Environment:
+                Variables:
+                    OUTPUT_BUCKET_NAME: !Sub '${AWS::StackName}-${AWS::Region}-${AWS::AccountId}'
+            Code:
+                S3Bucket: term-end-code
+                S3Key: download_csv.zip
+
+    # Permissions
+    S3InvokeTextDetectionLambdaPermission:
+        Type: AWS::Lambda::Permission
+        DependsOn: TextDetectionLambda
+        Properties:
+            Action: lambda:InvokeFunction
+            FunctionName: !Ref TextDetectionLambda
+            Principal: s3.amazonaws.com
+            SourceArn: !Sub
+                - arn:aws:s3:::${TextExtractBucket}
+                - { TextExtractBucket: !Join [ '-', [ !Ref AWS::StackName, !Ref AWS::Region, !Ref AWS::AccountId ] ] }
+
+    SNSInvokeCSVGeneratorLambdaPermission:
+        Type: AWS::Lambda::Permission
+        DependsOn: CSVGeneratorLambda
+        Properties:
+            Action: lambda:InvokeFunction
+            FunctionName: !GetAtt CSVGeneratorLambda.Arn
+            Principal: sns.amazonaws.com
+
+    LambdaInvokePermission:
+        Type: AWS::Lambda::Permission
+        Properties:
+            FunctionName: !Ref CsvDownloadLambda
+            Action: lambda:InvokeFunction
+            Principal: apigateway.amazonaws.com
+            SourceArn:
+                Fn::Sub:
+                    - arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${apiId}/*
+                    - apiId: !Ref CsvApiGateway
+
+    # Layers
+    PandasLayer:
+        Type: AWS::Lambda::LayerVersion
+        Properties:
+            CompatibleRuntimes:
+                - python3.9
+            Content:
+                S3Bucket: term-end-code
+                S3Key: pandas.zip
+            Description: Pandas layer
+
+    Frontend:
+        Type: AWS::EC2::Instance
+        DependsOn:
+            - UploadUrlParameter
+            - EC2SecurityGroup
+        Properties:
+            ImageId: ami-0c101f26f147fa7fd
+            InstanceType: t2.micro
+            KeyName: term-end-ass
+            IamInstanceProfile: !Ref FrontendProfile
+            SecurityGroupIds:
+                - !Ref EC2SecurityGroup
+            UserData:
+                Fn::Base64: !Sub |
+                    #!/bin/bash -xe
+                    exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+                    yum update -y
+                    yum install -y aws-cli
+                    NEXT_PUBLIC_UPLOAD_URL=$(aws ssm get-parameter --name UploadUrl --query 'Parameter.Value' --output text)
+                    echo "export NEXT_PUBLIC_UPLOAD_URL=$NEXT_PUBLIC_UPLOAD_URL" >> /etc/environment
+                    source /etc/environment
+                    NEXT_PUBLIC_DOWNLOAD_URL=$(aws ssm get-parameter --name DownloadUrl --query 'Parameter.Value' --output text)
+                    echo "export NEXT_PUBLIC_DOWNLOAD_URL=$NEXT_PUBLIC_DOWNLOAD_URL" >> /etc/environment
+                    source /etc/environment
+                    aws s3 cp s3://term-end-code/frontend.zip /home/ec2-user/
+                    yum install -y unzip
+                    unzip /home/ec2-user/frontend.zip -d /home/ec2-user/
+                    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+                    export NVM_DIR="$HOME/.nvm"
+                    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" 
+                    nvm install node
+                    npm install -g pm2
+                    cd /home/ec2-user/frontend
+                    npm install
+                    npm run build
+                    pm2 start npm --name "next-app" -- start
+
+    # Security Group
+    EC2SecurityGroup:
+        Type: AWS::EC2::SecurityGroup
+        Properties:
+            GroupDescription: 'My security group for EC2 frontend'
+            SecurityGroupIngress:
+                - IpProtocol: '-1'
+                  CidrIp: '0.0.0.0/0'
+
+    # Profile
+    FrontendProfile:
+        Type: AWS::IAM::InstanceProfile
+        Properties:
+            Roles:
+                - "LabRole"
+
+# Storage
+    TextExtractBucket:
+        Type: AWS::S3::Bucket
+        DependsOn: TextDetectionLambda
+        Properties:
+            BucketName: !Sub '${AWS::StackName}-${AWS::Region}-${AWS::AccountId}'
+            NotificationConfiguration:
+                LambdaConfigurations:
+                    - Event: s3:ObjectCreated:*
+                      Function: !GetAtt TextDetectionLambda.Arn
+                      Filter:
+                          S3Key:
+                              Rules:
+                                  - Name: prefix
+                                    Value: input/
+                                  - Name: suffix
+                                    Value: .pdf
+
+# Network
+    TextExtractApiGateway:
+        Type: AWS::ApiGateway::RestApi
+        Properties:
+            Name: TextExtractApiGateway
+            Description: API Gateway with binary support for Text Extract
+            BinaryMediaTypes:
+                - '*/*'
+
+    CsvApiGateway:
+        Type: AWS::ApiGateway::RestApi
+        Properties:
+            Name: CsvApiGateway
+            Description: API Gateway for triggering the CsvDownloadLambda function
+
+    # Resource
+    UploadResource:
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            RestApiId: !Ref TextExtractApiGateway
+            ParentId: !GetAtt
+                - TextExtractApiGateway
+                - RootResourceId
+            PathPart: upload
+
+    FilenameResource:
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            RestApiId: !Ref TextExtractApiGateway
+            ParentId: !Ref UploadResource
+            PathPart: '{filename}'
+
+    CsvResource:
+        Type: AWS::ApiGateway::Resource
+        Properties:
+            RestApiId: !Ref CsvApiGateway
+            ParentId: !GetAtt
+                - CsvApiGateway
+                - RootResourceId
+            PathPart: download
+
+    # Method
+    UploadMethod:
+        Type: AWS::ApiGateway::Method
+        Properties:
+            RestApiId: !Ref TextExtractApiGateway
+            ResourceId: !Ref FilenameResource
+            HttpMethod: PUT
+            AuthorizationType: NONE
+            ApiKeyRequired: false
+            RequestParameters:
+                method.request.header.Content-Type: false
+                method.request.path.filename: true
+            Integration:
+                Type: AWS
+                IntegrationHttpMethod: PUT
+                Uri:
+                    Fn::Sub:
+                        - arn:aws:apigateway:${AWS::Region}:s3:path/${BucketName}/input/{filename}
+                        - BucketName: !Ref TextExtractBucket
+                PassthroughBehavior: WHEN_NO_TEMPLATES
+                Credentials: !Ref RoleArn
+                RequestParameters:
+                    integration.request.path.filename: 'method.request.path.filename'
+                IntegrationResponses:
+                    - StatusCode: 200
+                      ResponseParameters:
+                          method.response.header.Access-Control-Allow-Origin: "'*'"
+            MethodResponses:
+                - StatusCode: 200
+                  ResponseParameters:
+                      method.response.header.Access-Control-Allow-Origin: true
+
+    CsvGetMethod:
+        Type: AWS::ApiGateway::Method
+        Properties:
+            RestApiId: !Ref CsvApiGateway
+            ResourceId: !Ref CsvResource
+            HttpMethod: 'GET'
+            AuthorizationType: 'NONE'
+            Integration:
+                Type: 'AWS_PROXY'
+                IntegrationHttpMethod: 'POST'
+                Uri:
+                    Fn::Sub:
+                        - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations
+                        - lambdaArn: !GetAtt CsvDownloadLambda.Arn
+
+    # Deployment
+    TextExtractApiDeployment:
+        Type: AWS::ApiGateway::Deployment
+        DependsOn: UploadMethod
+        Properties:
+            RestApiId: !Ref TextExtractApiGateway
+            Description: Deployment for the PDF Upload API
+            StageName: prod
+
+    CsvApiDeployment:
+        Type: AWS::ApiGateway::Deployment
+        DependsOn: CsvGetMethod
+        Properties:
+            RestApiId: !Ref CsvApiGateway
+            Description: Deployment for the CSV Download API
+            StageName: prod
+
+# General
+    TextExtractSNSTopic:
+        Type: AWS::SNS::Topic
+        Properties:
+            TopicName: AmazonTextractTopic
+            Subscription:
+                - Protocol: lambda
+                  Endpoint: !GetAtt CSVGeneratorLambda.Arn
+
+# SSM Parameter
+    UploadUrlParameter:
+        Type: AWS::SSM::Parameter
+        DependsOn: TextExtractApiDeployment
+        Properties:
+            Name: UploadUrl
+            Type: String
+            Value: !Sub "https://${TextExtractApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+    DownloadUrlParameter:
+        Type: AWS::SSM::Parameter
+        DependsOn: CsvApiDeployment
+        Properties:
+            Name: DownloadUrl
+            Type: String
+            Value: !Sub "https://${CsvApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/download"
+
+# Output
+Outputs:
+    TextExtractBucketName:
+        Description: The name of the S3 bucket
+        Value: !Ref TextExtractBucket
+    TextDetectionLambdaFunctionArn:
+        Description: The ARN of the TextDetectionLambda function
+        Value: !GetAtt TextDetectionLambda.Arn
+    CSVGeneratorLambdaFunctionArn:
+        Description: The ARN of the CSVGeneratorLambda function
+        Value: !GetAtt CSVGeneratorLambda.Arn
+    TextExtractApiUrl:
+        Description: The URL of the TextExtract API
+        Value: !Sub "https://${TextExtractApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/upload/{filename}"
+        Export:
+            Name: TextExtractApiUrl
+    InstanceId:
+        Description: The Instance ID
+        Value: !Ref Frontend
+    CsvApiUrl:
+        Description: URL for the CSV Download API
+        Value: !Sub "https://${CsvApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod/download"
+```
+
+You can watch the process step by step on how to run cloudformation script on AWS in my [YouTube video](https://www.youtube.com/watch?v=wTmT9deo9dU&t=76s).
+
+That’s all for this project! I hope you found this guide helpful and are now able to extract text from PDF files and store it in CSV files using AWS services. Remember, the key to mastering any technology is practice. So, don’t hesitate to get your hands dirty and experiment with the code.
+
+If you have any questions or run into any issues, feel free to reach out to me. I’ll do my best to help. Stay tuned for more exciting projects and keep exploring the endless possibilities of cloud computing with AWS. Happy coding! 💻🚀
+
+Link to the [Source Code](https://github.com/bhishman-desai/extractgen).
