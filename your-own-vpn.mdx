@@ -1,0 +1,70 @@
+---
+title: 'Create your own VPN on azure for free in under 15 minutes'
+date: '2024-06-28'
+tags: ['vpn', 'custom']
+---
+
+Setting up a VPN doesn't have to be complicated or expensive. In this guide, I'll show you how to create a VPN in less than 15 minutes for free on Azure. Let's dive in!
+
+### Step 1: Search for OpenVPN Access Server
+
+First, search for "OpenVPN Access Server" in the search box of your Azure console and click the resource from the Marketplace as shown below.
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/your-vpn/001.png" alt="Instruction" />
+
+### Step 2: Create the Resource
+
+Click on the "Create" button as shown below.
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/your-vpn/002.png" alt="Instruction" />
+
+### Step 3: Configure the Settings
+
+You'll need to configure various settings for the OpenVPN Access Server Virtual Machine. Keep all the settings as they are, especially the image. However, make sure you're using an appropriate machine size to avoid burning through your dollars real quick. **A General purpose B1s will suffice**. Then, click on the "Review + Create" button to proceed with the default settings, especially the network settings, as they are necessary for the VPN to function correctly.
+
+The VM will take some time to be up and running.
+
+### Step 4: Connect to the Server
+
+Once the VM is up, connect to the server using SSH via Azure CLI.
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/your-vpn/003.png" alt="Instruction" />
+
+You'll see the initial configuration screen as shown below.
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/your-vpn/004.png" alt="Instruction" />
+
+Enter "yes" to indicate your agreement.
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/your-vpn/005.png" alt="Instruction" />
+
+Follow the configuration prompts:
+
+1. Press **1** for having both user and admin interfaces.
+2. Go with the **default options for the next two prompts**.
+3. Set the Admin UI port to **943**.
+4. Set the TCP connection port to **443**.
+5. Indicate that client traffic should be routed through the VPN - "**yes**".
+6. Indicate that DNS traffic should be routed by default through the VPN - "**yes**".
+7. Indicate that private subnet should be accessible to clients by default - "**yes**".
+8. Set the username for the admin UI. You can go with the default "**openvpn**" or create a new one.
+9. Generate a strong password following the usual constraints.
+
+You will now see two URLs: one for the Admin UI and one for the Client.
+
+### Step 5: Access the Admin UI
+
+Go to the Admin UI URL and follow the steps shown below.
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/your-vpn/006.png" alt="Instruction" />
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/your-vpn/007.png" alt="Instruction" />
+
+### Step 6: Access the Client URL
+
+Next, go to the Client URL. It should look something like this:
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/your-vpn/008.png" alt="Instruction" />
+
+Choose the type of device you're running and download the package. The beauty of this package is that you won’t have to set up any configurations (encryption keys, decryption keys, etc.) on your own. Everything will be preconfigured.
+
+## Enjoy Tunneling! 🌐
