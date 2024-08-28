@@ -1,0 +1,1585 @@
+---
+title: 'Six-Pillars Automated Cloud: Well Architected Three-Tier Framework'
+date: '2024-08-28'
+tags: ['cloud', 'aws', 'IaC', 'dbms']
+---
+
+In this blog post, I'll guide you through designing a 3-tier architecture that is highly available, fault-tolerant, and resilient, following AWS’s [6 Pillars of the Well-Architected Framework](https://aws.amazon.com/architecture/well-architected/).
+
+### Why IaC and CloudFormation for Setting Up Infrastructure?
+
+#### Scenario:
+You’ve been tasked with creating a 3-tier architecture in AWS for a new application. Why choose a multi-tier architecture? It provides scalability, performance optimization, and high availability.
+
+While you could manually set this up through the AWS Console, imagine going on vacation for two months without network diagrams, and the application goes down. Troubleshooting would be a nightmare.
+
+That’s where AWS CloudFormation comes in. CloudFormation enables infrastructure automation, allowing you to build, manage, and replicate entire stacks with just a few clicks. This means you can create, destroy, and rebuild your architecture consistently every time.
+
+
+### Requirements
+
+1. Basic knowledge of how CloudFormation stacks work. Refer to [AWS CloudFormation Overview](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cloudformation-overview.html) for more information.
+2. Basic understanding of how a 3-tier application functions. Check out [Multi-Tier Architectures Overview](https://docs.aws.amazon.com/whitepapers/latest/serverless-multi-tier-architectures-api-gateway-lambda/three-tier-architecture-overview.html) for details.
+3. Familiarity with the following:
+    - Internet and NAT Gateway
+    - Load Balancers
+    - Auto Scaling groups
+
+### Architecture Diagram
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/well-architected-three-tier/001.png" alt="Final Framework" />
+
+By the end of this blog, you'll successfully deploy your 3-tier application using the infrastructure shown in the diagram above, following the [6 Pillars of the Well-Architected Framework](https://aws.amazon.com/architecture/well-architected/).
+
+### Step 1: Building the Core Infrastructure
+
+In this step, we'll set the foundation of our infrastructure by creating a VPC that spans two Availability Zones (AZs) using AWS CloudFormation. The goal is to design a highly available and secure three-tier architecture. Here's what we’ll be setting up:
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/well-architected-three-tier/002.jpg" alt="Core Infrastructure" />
+
+1. **VPC with Public and Private Subnets:**
+   - **Public Subnets:** For web instances that need internet access.
+   - **Private Subnets:** For application servers and databases, isolated from direct internet access.
+   - **Internet Gateway:** To allow outbound internet traffic for the public subnets.
+   - **NAT Gateway:** To enable instances in the private subnets to access the internet securely.
+
+2. **Security Group Chains:**
+   - A series of security groups that allow controlled traffic flow from the public load balancer to the application instances and finally to the database.
+
+3. **Load Balancers:**
+   - **Public Load Balancer:** Receives traffic from the internet and forwards it to the web instances in the public subnets.
+   - **Internal Load Balancer:** Receives traffic from web instances and forwards it to the application instances in the private subnets.
+
+
+> **Note:** The CloudFormation stacks are nested, meaning other stacks will rely on this one to import values like subnet IDs, security group IDs, etc. This modular approach keeps the infrastructure manageable and scalable.
+For this purpose, the stack name should be ```core-infrastructure```
+
+
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template for a three-tier VPC infrastructure with high availability across two availability zones.
+  Follows 6 pillars of well architected framework along with their best practices.
+  Mandatory: The stack name should be core-infrastructure. This is crucial as other stacks are importing values from this stack and will not work properly if the stack name is different.
+
+Parameters:
+  NamingPrefix:
+    Type: String
+    Default: term-end-app
+    Description: Prefix for naming AWS resources
+
+  VPCIPv4CidrBlock:
+    Type: String
+    Default: 15.0.0.0/16
+    Description: CIDR block for the VPC
+
+  PublicAppSubnet1CIDR:
+    Type: String
+    Default: 15.0.0.0/20
+    Description: CIDR block for the public subnet 1
+
+  PublicAppSubnet2CIDR:
+    Type: String
+    Default: 15.0.16.0/20
+    Description: CIDR block for the public subnet 2
+
+  PrivateAppSubnet1CIDR:
+    Type: String
+    Default: 15.0.128.0/20
+    Description: CIDR block for the private application subnet 1
+
+  PrivateAppSubnet2CIDR:
+    Type: String
+    Default: 15.0.144.0/20
+    Description: CIDR block for the private application subnet 2
+
+  PrivateDBSubnet1CIDR:
+    Type: String
+    Default: 15.0.160.0/20
+    Description: CIDR block for the private database subnet 1
+
+  PrivateDBSubnet2CIDR:
+    Type: String
+    Default: 15.0.176.0/20
+    Description: CIDR block for the private database subnet 2
+
+Resources:
+  # Create the VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCIPv4CidrBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-VPC'
+
+  # Create an Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-InternetGateway'
+
+  # Attach the Internet Gateway to the VPC
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Create public subnets
+  PublicAppSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicAppSubnet1CIDR
+      AvailabilityZone: us-east-1a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PublicSubnet1'
+
+  PublicAppSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicAppSubnet2CIDR
+      AvailabilityZone: us-east-1b
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PublicSubnet2'
+
+  # Create private subnets for the application tier
+  PrivateAppSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateAppSubnet1CIDR
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PrivateAppSubnet1'
+
+  PrivateAppSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateAppSubnet2CIDR
+      AvailabilityZone: us-east-1b
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PrivateAppSubnet2'
+
+  # Create private subnets for the database tier
+  PrivateDBSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateDBSubnet1CIDR
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PrivateDBSubnet1'
+
+  PrivateDBSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateDBSubnet2CIDR
+      AvailabilityZone: us-east-1b
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PrivateDBSubnet2'
+
+  # Create a Route Table for the public subnets
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PublicRouteTable'
+
+  # Add a route to the Internet Gateway in the public Route Table
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Associate the public subnets with the public Route Table
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicAppSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicAppSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # Create Elastic IPs for the NAT Gateways
+  EIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  EIP2:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # Create NAT Gateways in the public subnets
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIP1.AllocationId
+      SubnetId: !Ref PublicAppSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-NatGateway1'
+
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIP2.AllocationId
+      SubnetId: !Ref PublicAppSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-NatGateway2'
+
+  # Create a Route Table for the private application subnets
+  PrivateAppRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PrivateAppRouteTable1'
+
+  PrivateAppRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PrivateAppRouteTable2'
+
+  # Add routes to the NAT Gateways in the private application Route Tables
+  PrivateAppRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateAppRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  # Associate the private application subnets with the private Route Tables
+  PrivateAppSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet1
+      RouteTableId: !Ref PrivateAppRouteTable1
+
+  PrivateAppSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet2
+      RouteTableId: !Ref PrivateAppRouteTable2
+
+  # Create Route Tables for the private database subnets
+  PrivateDBRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PrivateDBRouteTable1'
+
+  PrivateDBRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-PrivateDBRouteTable2'
+
+  # Add routes to the NAT Gateways in the private database Route Tables
+  PrivateDBRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateDBRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateDBRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateDBRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+
+  # Associate the private database subnets with the private Route Tables
+  PrivateDBSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDBSubnet1
+      RouteTableId: !Ref PrivateDBRouteTable1
+
+  PrivateDBSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDBSubnet2
+      RouteTableId: !Ref PrivateDBRouteTable2
+
+  # Create Security Groups
+  PublicLoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic to the public load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  PublicInstanceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic from the public load balancer to public instances
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref PublicLoadBalancerSG
+
+  InternalLoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic from public instances to the internal load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref PublicInstanceSG
+
+  PrivateInstanceSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow TCP traffic on port 4000 from the internal load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 4000
+          ToPort: 4000
+          SourceSecurityGroupId: !Ref InternalLoadBalancerSG
+
+  PrivateDatabaseSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from private instances to the database
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref PrivateInstanceSG
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VPCId'
+
+  PublicSubnet1Id:
+    Description: Public Subnet 1 ID
+    Value: !Ref PublicAppSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet1Id'
+
+  PublicSubnet2Id:
+    Description: Public Subnet 2 ID
+    Value: !Ref PublicAppSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicSubnet2Id'
+
+  PrivateAppSubnet1Id:
+    Description: Private Application Subnet 1 ID
+    Value: !Ref PrivateAppSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateAppSubnet1Id'
+
+  PrivateAppSubnet2Id:
+    Description: Private Application Subnet 2 ID
+    Value: !Ref PrivateAppSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateAppSubnet2Id'
+
+  PrivateDBSubnet1Id:
+    Description: Private Database Subnet 1 ID
+    Value: !Ref PrivateDBSubnet1
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateDBSubnet1Id'
+
+  PrivateDBSubnet2Id:
+    Description: Private Database Subnet 2 ID
+    Value: !Ref PrivateDBSubnet2
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateDBSubnet2Id'
+
+  PublicInstanceSGId:
+    Description: Public Web Security Group
+    Value: !Ref PublicInstanceSG
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicInstanceSGId'
+
+  PrivateDatabaseSGId:
+    Description: Private Database Security Group
+    Value: !Ref PrivateDatabaseSG
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateDatabaseSGId'
+
+  PrivateInstanceSGId:
+    Description: Private App Security Group
+    Value: !Ref PrivateInstanceSG
+    Export:
+      Name: !Sub '${AWS::StackName}-PrivateInstanceSGId'
+
+  PublicLoadBalancerSG:
+    Description: Public Load Balancer Security Group
+    Value: !Ref PublicLoadBalancerSG
+    Export:
+      Name: !Sub '${AWS::StackName}-PublicLoadBalancerSG'
+
+  InternalLoadBalancerSG:
+    Description: Internal Load Balancer Security Group
+    Value: !Ref InternalLoadBalancerSG
+    Export:
+      Name: !Sub '${AWS::StackName}-InternalLoadBalancerSG'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "VPC Configuration"
+        Parameters:
+          - VPCIPv4CidrBlock
+          - PublicAppSubnet1CIDR
+          - PublicAppSubnet2CIDR
+          - PrivateAppSubnet1CIDR
+          - PrivateAppSubnet2CIDR
+          - PrivateDBSubnet1CIDR
+          - PrivateDBSubnet2CIDR
+    ParameterLabels:
+      VPCIPv4CidrBlock:
+        default: "VPC CIDR Block"
+      PublicSubnet1CIDR:
+        default: "Public Subnet 1 CIDR Block"
+      PublicSubnet2CIDR:
+        default: "Public Subnet 2 CIDR Block"
+      PrivateAppSubnet1CIDR:
+        default: "Private Application Subnet 1 CIDR Block"
+      PrivateAppSubnet2CIDR:
+        default: "Private Application Subnet 2 CIDR Block"
+      PrivateDBSubnet1CIDR:
+        default: "Private Database Subnet 1 CIDR Block"
+      PrivateDBSubnet2CIDR:
+        default: "Private Database Subnet 2 CIDR Block"
+```
+
+### Step 2: Setting Up Database
+
+- **Database Instances:** Set up Amazon Aurora RDS within the VPC created in above stack, ensuring proper integration with the VPC's subnet groups and instances.
+- **Multi-AZ Deployment:**
+   - **Primary Database:** Deployed in one Availability Zone (AZ) to handle write operations.
+   - **Secondary Database:** Deployed in a different AZ as a read replica for redundancy and load balancing of read operations.
+
+The stack name should be ```database```
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/well-architected-three-tier/003.png" alt="Database" />
+
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template for setting up MySQL-Compatible Amazon Aurora RDS within the specified VPC, including subnet groups and instances.
+  Follows 6 pillars of well architected framework along with their best practices.
+
+Parameters:
+  NamingPrefix:
+    Type: String
+    Default: term-end-app
+    Description: Prefix for naming AWS resources
+
+  DBUsername:
+    Type: String
+    Default: root
+    Description: The database admin account username
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: The database admin account password
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.medium
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.r5.large
+      - db.r5.xlarge
+    Description: The instance class of the DB instance
+
+  BackupRetentionPeriod:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 35
+    Description: The number of days to retain backups for
+
+Resources:
+  # Database Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for DB
+      SubnetIds:
+        - !ImportValue core-infrastructure-PrivateDBSubnet1Id
+        - !ImportValue core-infrastructure-PrivateDBSubnet2Id
+      DBSubnetGroupName: !Sub '${NamingPrefix}-db-subnet-group'
+
+  # DB Cluster
+  DBCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora-mysql
+      EngineMode: provisioned
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+        - !ImportValue core-infrastructure-PrivateDatabaseSGId
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod
+      PreferredBackupWindow: 07:00-09:00
+      PreferredMaintenanceWindow: Mon:00:00-Mon:03:00
+      EnableIAMDatabaseAuthentication: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-db-cluster'
+
+  # DB Instance 1
+  DBInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref DBCluster
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: aurora-mysql
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-db-instance-1'
+
+  # DB Instance 2
+  DBInstance2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref DBCluster
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: aurora-mysql
+      AvailabilityZone: us-east-1b
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-db-instance-2'
+
+  # Secrets Manager Secret
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    DependsOn: DBCluster
+    Properties:
+      Name: !Sub 'db-credentials'
+      Description: 'Credentials for the Aurora DB Cluster'
+      SecretString: !Join
+        - ''
+        - - '{ "username": "'
+          - !Ref DBUsername
+          - '", "password": "'
+          - !Ref DBPassword
+          - '", "host": "'
+          - !GetAtt DBCluster.Endpoint.Address
+          - '", "port": "3306", "dbname": "waiting_coder" }'
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-db-secret'
+
+Outputs:
+  DBClusterId:
+    Description: DB Cluster ID
+    Value: !Ref DBCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-DBClusterId'
+
+  DBInstance1Id:
+    Description: DB Instance 1 ID
+    Value: !Ref DBInstance1
+    Export:
+      Name: !Sub '${AWS::StackName}-DBInstance1Id'
+
+  DBInstance2Id:
+    Description: DB Instance 2 ID
+    Value: !Ref DBInstance2
+    Export:
+      Name: !Sub '${AWS::StackName}-DBInstance2Id'
+
+  DBSecretArn:
+    Description: ARN of the Secrets Manager Secret
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-DBSecretArn'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Database Configuration"
+        Parameters:
+          - DBUsername
+          - DBPassword
+          - DBInstanceClass
+          - BackupRetentionPeriod
+    ParameterLabels:
+      DBUsername:
+        default: "Database Username"
+      DBPassword:
+        default: "Database Password"
+      DBInstanceClass:
+        default: "Database Instance Class"
+      BackupRetentionPeriod:
+        default: "Backup Retention Period"
+```
+
+
+### Step 3: Setting Up the App Tier (Backend)
+
+- **EC2 Instance Setup:** Deploy an EC2 instance for the app tier, running an Ubuntu AMI with necessary configurations.
+- **User Data Parameter:** The stack takes a user data parameter that can be used to:
+   - Clone the repository you want to run on the EC2 instance.
+   - Perform any other initialization tasks on the EC2 instance.
+
+The stack name should be ```app```
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/well-architected-three-tier/004.png" alt="App Tier" />
+
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template for setting up an EC2 instance for the app tier, running an Ubuntu AMI with necessary configurations.
+  Follows 6 pillars of well architected framework along with their best practices.
+  Mandatory: The stack name should be app. This is crucial as other stacks are importing values from this stack and will not work properly if the stack name is different.
+
+Parameters:
+  NamingPrefix:
+    Type: String
+    Default: term-end-app
+    Description: Prefix for naming AWS resources
+
+  KeyName:
+    Type: String
+    Default: term-end
+    Description: Key name for EC2
+
+  LabRole:
+    Description: Existing IAM role name
+    Type: String
+    Default: LabRole
+
+  RoleArn:
+    Description: Existing IAM role ARN
+    Type: String
+    Default: arn:aws:iam::114580182108:role/LabRole
+
+  AMI:
+    Description: AMI ID
+    Type: String
+    Default: ami-04b70fa74e45c3917
+
+  InstanceType:
+    Description: EC2 Instance Type
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t3.micro
+      - t3.small
+      - t3.medium
+
+  UserData:
+    Description: User data script for EC2 instance
+    Type: String
+    Default: |
+      #!/bin/bash 
+      exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+      echo "Updating packages..."
+      apt-get update -y
+
+      echo "Installing MySQL server..."
+      apt-get install mysql-server -y
+
+      echo "Installing jq..."
+      apt-get install jq -y
+
+      echo "Installing AWS CLI..."
+      snap install aws-cli --classic
+
+      echo "Fetching database credentials from AWS Secrets Manager..."
+      export DB_SECRET=$(aws secretsmanager get-secret-value --secret-id db-credentials --query 'SecretString' --output text)
+      export DB_HOST=$(echo $DB_SECRET | jq -r '.host')
+      export DB_USER=$(echo $DB_SECRET | jq -r '.username')
+      export DB_PASSWORD=$(echo $DB_SECRET | jq -r '.password')
+
+      echo "Creating the database using MySQL CLI..."
+      mysql -u $DB_USER -p$DB_PASSWORD -h $DB_HOST -e "create database waiting_coder;"
+
+      echo "Installing NVM (Node Version Manager)..."
+      curl https://raw.githubusercontent.com/creationix/nvm/master/install.sh | bash
+      export NVM_DIR="$HOME/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" 
+
+      echo "Installing Node.js..."
+      nvm install 20
+      nvm use 20
+
+      echo "Installing PM2 (Daemon Process Manager)..."
+      npm install -g pm2
+
+      echo "Installing AWS SDK for JavaScript..."
+      npm install -g @aws-sdk/client-secrets-manager
+
+      echo "Cloning the backend repository..."
+      git clone -b bhishman/no-ref/changes https://github.com/bhishman-desai/waiting_coder.git
+      cd waiting_coder
+      
+      echo "Populating database with tables and data..."
+      mysql -u $DB_USER -p$DB_PASSWORD -h $DB_HOST -e "use waiting_coder; source waiting_coder.sql;"
+
+      echo "Installing backend dependencies..."
+      cd backend
+      npm install
+
+      echo "Starting the Node.js application using PM2..."
+      pm2 start npm --name "waiting_coder" -- run dev
+
+      echo "Ensuring PM2 starts on reboot and saves the current list of processes..."
+      pm2 startup
+      pm2 save
+
+      echo "export DB_SECRET='$DB_SECRET'" >> ~/.bashrc
+      echo "export DB_HOST='$DB_HOST'" >> ~/.bashrc
+      echo "export DB_USER='$DB_USER'" >> ~/.bashrc
+      echo "export DB_PASSWORD='$DB_PASSWORD'" >> ~/.bashrc
+
+Resources:
+  # Profile
+  AppProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref LabRole
+
+  # EC2 Instance
+  AppTierInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AMI
+      KeyName: !Ref KeyName
+      SubnetId: !ImportValue core-infrastructure-PrivateAppSubnet1Id
+      SecurityGroupIds:
+        - !ImportValue core-infrastructure-PrivateInstanceSGId
+      IamInstanceProfile: !Ref AppProfile
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-app-tier-instance'
+      UserData:
+        Fn::Base64: !Ref UserData
+
+Outputs:
+  InstanceId:
+    Description: The Instance ID of the app tier
+    Value: !Ref AppTierInstance
+    Export:
+      Name: !Sub '${AWS::StackName}-AppTierInstanceId'
+
+  AppProfile:
+    Description: The App Profile
+    Value: !Ref AppProfile
+    Export:
+      Name: !Sub '${AWS::StackName}-AppProfile'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "App Tier Configuration"
+        Parameters:
+          - LabRole
+          - RoleArn
+          - AMI
+          - InstanceType
+          - UserData
+          - KeyName
+          - NamingPrefix
+    ParameterLabels:
+      NamingPrefix:
+        default: "Naming Prefix for Resources"
+      KeyName:
+        default: "EC2 Key Pair Name"
+      LabRole:
+        default: "Existing IAM Role Name"
+      RoleArn:
+        default: "Existing IAM Role ARN"
+      AMI:
+        default: "AMI ID"
+      InstanceType:
+        default: "EC2 Instance Type"
+      UserData:
+        default: "User Data Script for EC2 Instance"
+```
+
+### Step 4: Set Up Application Load Balancer (Internal Load Balancer) and Auto Scaling Groups
+
+- **Instructions:**
+  This stack creates an AMI using a Lambda function. You can download the code for the Lambda function from [this link](https://github.com/bhishman-desai/aws-cloud-architecture/blob/main/resources/wrapping-lambda/wrapping-lambda.zip) and store it in your s3 bucket.
+   - **Upload Lambda Code:** Upload the downloaded Lambda function code to your S3 bucket.
+   - **CloudFormation Parameter:** Pass the name of the S3 bucket containing the Lambda function code as a parameter when setting up the CloudFormation stack.
+
+- **Functionality:** This stack performs the following:
+   - **Creates an Application Load Balancer:** Configured to handle internal traffic.
+   - **Sets Up Auto Scaling Groups:** Manages the scaling of instances based on demand.
+
+> **Note:** Ensure that the Lambda function code is correctly uploaded and the S3 bucket name is accurately specified in the CloudFormation parameters to ensure proper stack deployment.
+
+**Stack Overview:**
+
+- **AMI Image Creation:** Creates an AMI image of the app instance.
+- **Launch Template Creation:** Creates a launch template from the AMI to configure Auto Scaling groups.
+- **Target Group Configuration:** Sets up target groups used by load balancers. The port number is configurable via stack parameters.
+- **Load Balancer Configuration:** Configures the load balancer, selecting internal or public-facing as needed, and adds a listener. The port is also configurable via stack parameters.
+- **Auto Scaling Groups Configuration:** Sets up Auto Scaling groups with the launch template, attaches the load balancer, and specifies the max, min, and desired capacities, configurable through stack parameters.
+
+The stack name should be ```internal-load-balancer-autoscaling```
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/well-architected-three-tier/005.png" alt="App Tier ALB and ASG" />
+
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template for setting up internal load balancing and auto scaling for the app tier.
+  Follows 6 pillars of well architected framework along with their best practices.
+
+Parameters:
+  NamingPrefix:
+    Type: String
+    Default: term-end-app
+    Description: Prefix for naming AWS resources
+
+  RoleArn:
+    Description: Existing IAM role ARN
+    Type: String
+    Default: arn:aws:iam::114580182108:role/LabRole
+
+  S3Bucket:
+    Type: String
+    Description: S3 bucket name for the wrapping lambda function
+    Default: term-end
+
+  InstanceType:
+    Type: String
+    Description: EC2 instance type
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+    Default: t3.micro
+
+  TargetGroupPort:
+    Type: Number
+    Description: Port for target group and health check
+    Default: 4000
+
+  TargetGroupHealthCheckPort:
+    Type: String
+    Description: Target group health check port
+    Default: traffic-port
+
+  ListenerPort:
+    Type: Number
+    Description: Port for the load balancer listener
+    Default: 80
+
+  MinSize:
+    Type: Number
+    Description: Minimum size of the auto-scaling group
+    Default: 2
+
+  MaxSize:
+    Type: Number
+    Description: Maximum size of the auto-scaling group
+    Default: 3
+
+  DesiredCapacity:
+    Type: Number
+    Description: Desired capacity of the auto-scaling group
+    Default: 2
+
+Resources:
+  # Lambda Function to create AMI
+  CreateAmiFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !Ref RoleArn
+      Runtime: nodejs16.x
+      Timeout: 300
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue core-infrastructure-PrivateAppSubnet1Id
+        SecurityGroupIds:
+          - !ImportValue core-infrastructure-PrivateInstanceSGId
+      Environment:
+        Variables:
+          DESCRIPTION: 'App tier AMI with Node.js application and MySQL configurations'
+      Code:
+        ZipFile: |
+          const AWS = require('aws-sdk');
+          const ec2 = new AWS.EC2();
+
+          exports.handler = async function(event, context) {
+              console.log("Event: ", JSON.stringify(event, null, 2));
+              const instanceId = event.ResourceProperties.InstanceId || event.detail['instance-id'];
+              const imageName = event.ResourceProperties.ImageName || event.detail['instance-id'] || process.env.IMAGE_NAME;
+              const description = process.env.DESCRIPTION;
+
+              if (!instanceId) {
+                  const errorMessage = "Instance ID is undefined in the event.";
+                  console.error(errorMessage);
+                  return {
+                      StatusCode: 500,
+                      Body: {Error: errorMessage}
+                  };
+              }
+
+              console.log("Creating AMI for Instance ID: ", instanceId);
+              const params = {
+                  InstanceId: instanceId,
+                  Name: imageName,
+                  Description: description,
+                  NoReboot: true
+              };
+              try {
+                  const result = await ec2.createImage(params).promise();
+                  console.log("AMI created: ", result.ImageId);
+                  return {
+                      StatusCode: 200,
+                      Body: { ImageId: result.ImageId }
+                  };
+              } catch (error) {
+                  console.error("Error creating AMI: ", error);
+                  return {
+                      StatusCode: 500,
+                      Body: {Error: error.message}
+                  };
+              }
+          };
+
+  # Wrapper Lambda Function
+  WrappingLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !Ref RoleArn
+      Runtime: nodejs16.x
+      Timeout: 300
+      VpcConfig:
+        SubnetIds:
+          - !ImportValue core-infrastructure-PrivateAppSubnet1Id
+        SecurityGroupIds:
+          - !ImportValue core-infrastructure-PrivateInstanceSGId
+      Environment:
+        Variables:
+          AMI_LAMBDA_ARN: !GetAtt CreateAmiFunction.Arn
+      Code:
+        S3Bucket: !Ref S3Bucket
+        S3Key: wrapping-lambda.zip
+
+  # Custom Resource to capture the AMI ID from the Wrapper Lambda Function
+  CreateAmiCustomResource:
+    Type: Custom::CreateAmi
+    Properties:
+      ServiceToken: !GetAtt WrappingLambdaFunction.Arn
+      ServiceTimeout: 300
+      LambdaFunctionName: !Ref CreateAmiFunction
+      InstanceId: !ImportValue app-AppTierInstanceId
+      ImageName: !Sub 'app-tier-image'
+
+  # Create a Launch Template from the AMI
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'app-tier-launch-template'
+      LaunchTemplateData:
+        ImageId: !GetAtt CreateAmiCustomResource.ImageId
+        InstanceType: !Ref InstanceType
+        SecurityGroupIds:
+          - !ImportValue core-infrastructure-PrivateInstanceSGId
+        IamInstanceProfile:
+          Name: !ImportValue app-AppProfile
+
+  # Target Group
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${NamingPrefix}-target-group'
+      Protocol: HTTP
+      Port: !Ref TargetGroupPort
+      VpcId: !ImportValue core-infrastructure-VPCId
+      TargetType: instance
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckPort: !Ref TargetGroupHealthCheckPort
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+
+  # Load Balancer
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${NamingPrefix}-internal-alb'
+      Scheme: internal
+      Subnets:
+        - !ImportValue core-infrastructure-PrivateAppSubnet1Id
+        - !ImportValue core-infrastructure-PrivateAppSubnet2Id
+      SecurityGroups:
+        - !ImportValue core-infrastructure-InternalLoadBalancerSG
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+
+  # Listener
+  AppListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AppLoadBalancer
+      Port: !Ref ListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+
+  # Auto Scaling Group
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${NamingPrefix}-asg'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !ImportValue core-infrastructure-PrivateAppSubnet1Id
+        - !ImportValue core-infrastructure-PrivateAppSubnet2Id
+      TargetGroupARNs:
+        - !Ref AppTargetGroup
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-app-instance'
+          PropagateAtLaunch: true
+
+Outputs:
+  LoadBalancerDNSName:
+    Description: DNS name of the internal load balancer
+    Value: !GetAtt AppLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerDNSName'
+
+  TargetGroupArn:
+    Description: ARN of the target group
+    Value: !Ref AppTargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-TargetGroupArn'
+
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling group
+    Value: !Ref AppAutoScalingGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-AutoScalingGroupName'
+
+  WrappingLambdaFunctionArn:
+    Description: The ARN of the Wrapping Lambda Function
+    Value: !GetAtt WrappingLambdaFunction.Arn
+    Export:
+      Name: !Sub 'app-WrappingLambdaFunctionArn'
+
+  CreateAmiFunctionName:
+    Description: The name of the Create AMI Lambda Function
+    Value: !Ref CreateAmiFunction
+    Export:
+      Name: !Sub 'app-CreateAmiFunctionName'
+
+  AppLaunchTemplateId:
+    Description: The Launch Template ID of the app tier
+    Value: !Ref AppLaunchTemplate
+    Export:
+      Name: !Sub 'app-AppLaunchTemplateId'
+
+  AppLaunchTemplateVersion:
+    Description: The version of the Launch Template
+    Value: !GetAtt AppLaunchTemplate.LatestVersionNumber
+    Export:
+      Name: !Sub 'app-AppLaunchTemplateVersion'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "App Tier Load Balancer and Auto Scaling Configuration"
+        Parameters:
+          - NamingPrefix
+          - RoleArn
+          - S3Bucket
+          - InstanceType
+          - TargetGroupPort
+          - ListenerPort
+          - MinSize
+          - MaxSize
+          - DesiredCapacity
+    ParameterLabels:
+      NamingPrefix:
+        default: "Naming Prefix"
+      RoleArn:
+        default: "IAM Role ARN"
+      S3Bucket:
+        default: "S3 Bucket for Wrapping Lambda Function"
+      InstanceType:
+        default: "EC2 Instance Type"
+      TargetGroupPort:
+        default: "Target Group Port"
+      ListenerPort:
+        default: "Load Balancer Listener Port"
+      MinSize:
+        default: "Auto Scaling Group Minimum Size"
+      MaxSize:
+        default: "Auto Scaling Group Maximum Size"
+      DesiredCapacity:
+        default: "Auto Scaling Group Desired Capacity"
+```
+
+### Step 5: Setting Up the Web Tier (Frontend)
+Similar to app tier. The only difference is this is used to set up your web tier so the instances are places in public subnet instead of private.
+- **EC2 Instance Setup:** Deploy an EC2 instance for the web tier, running an Ubuntu AMI with necessary configurations.
+- **User Data Parameter:** The stack takes a user data parameter that can be used to:
+   - Clone the repository you want to run on the EC2 instance.
+   - Perform any other initialization tasks on the EC2 instance.
+
+The stack name should be ```web```
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/well-architected-three-tier/006.png" alt="Web Tier ALB and ASG" />
+
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template for setting up an EC2 instance for the web tier, running an NGINX server on an Ubuntu AMI with necessary configurations.
+  Follows 6 pillars of well architected framework along with their best practices.
+  Mandatory: The stack name should be web. This is crucial as other stacks are importing values from this stack and will not work properly if the stack name is different.
+
+Parameters:
+  NamingPrefix:
+    Type: String
+    Default: term-end-web
+    Description: Prefix for naming AWS resources
+
+  KeyName:
+    Type: String
+    Default: term-end
+    Description: Key name for EC2
+
+  LabRole:
+    Description: Existing IAM role name
+    Type: String
+    Default: LabRole
+
+  RoleArn:
+    Description: Existing IAM role ARN
+    Type: String
+    Default: arn:aws:iam::114580182108:role/LabRole
+
+  AMI:
+    Description: AMI ID
+    Type: String
+    Default: ami-04b70fa74e45c3917
+
+  InstanceType:
+    Type: String
+    Description: EC2 instance type
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+    Default: t3.micro
+
+  UserData:
+    Type: String
+    Description: User data script for EC2 instance
+    Default: |
+      #!/bin/bash
+      sudo -s
+      exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+      
+      echo "Updating packages"
+      apt-get update -y
+
+      echo "Installing NGINX"
+      apt-get install -y nginx
+
+      echo "Installing Node.js and npm"
+      curl -sL https://deb.nodesource.com/setup_20.x | bash -
+      apt-get install -y nodejs
+
+      echo "Cloning the repository"
+      git clone -b bhishman/no-ref/changes https://github.com/bhishman-desai/waiting_coder.git
+
+      echo "Configuring NGINX"
+      cd /etc/nginx
+      sudo rm nginx.conf
+      cp /waiting_coder/nginx.conf .
+
+      echo "Restarting NGINX"
+      sudo useradd -s /sbin/nologin nginx
+      sudo systemctl restart nginx
+      sudo systemctl status nginx
+
+      echo "Ensuring NGINX has permission to access our files"
+      sudo chmod -R 755 /home/ubuntu
+
+Resources:
+  # Profile
+  WebProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref LabRole
+
+  # EC2 Instance
+  WebTierInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref AMI
+      KeyName: !Ref KeyName
+      SubnetId: !ImportValue core-infrastructure-PublicSubnet1Id
+      SecurityGroupIds:
+        - !ImportValue core-infrastructure-PublicInstanceSGId
+      IamInstanceProfile: !Ref WebProfile
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-web-tier-instance'
+      UserData:
+        Fn::Base64: !Ref UserData
+
+Outputs:
+  InstanceId:
+    Description: The Instance ID of the web tier
+    Value: !Ref WebTierInstance
+    Export:
+      Name: !Sub '${AWS::StackName}-WebTierInstanceId'
+
+  PublicDnsName:
+    Description: The public DNS name of the web tier instance
+    Value: !GetAtt WebTierInstance.PublicDnsName
+    Export:
+      Name: !Sub '${AWS::StackName}-WebTierPublicDnsName'
+
+  WebProfile:
+    Description: The Web Profile
+    Value: !Ref WebProfile
+    Export:
+      Name: !Sub '${AWS::StackName}-WebProfile'
+```
+
+### Step 6: Set Up Application Load Balancer (Public Facing Load Balancer) and Auto Scaling Groups
+
+- **Public Facing Load Balancer Setup:**
+   - This stack sets up a public-facing Application Load Balancer (ALB) that will serve the web tier to the internet.
+   - The configuration is similar to the previous app tier setup, but this time the load balancer is exposed to the public.
+
+- **Reusability of Lambda Code:**
+   - The stack reuses the same Lambda code for creating the AMI, ensuring code reusability and consistency across different setups.
+
+- **Stack Configuration:**
+   - The configurations remain largely the same as in the app tier stack, with the main difference being the public exposure of the load balancer.
+
+The stack name should be ```public-load-balancer-autoscaling```
+
+<CustomImage src="https://raw.githubusercontent.com/bhishman-desai/blogposts/main/resources/well-architected-three-tier/007.png" alt="Web Tier ALB and ASG" />
+
+```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template for setting up public load balancing and auto scaling for the web tier.
+  Follows 6 pillars of well architected framework along with their best practices.
+
+Parameters:
+  NamingPrefix:
+    Type: String
+    Default: term-end-web
+    Description: Prefix for naming AWS resources
+
+  CertificateArn:
+    Type: String
+    Description: ARN of the SSL certificate for HTTPS
+    Default: arn:aws:acm:region:account-id:certificate/certificate-id
+
+  InstanceType:
+    Type: String
+    Description: EC2 instance type for the web tier
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t3.micro
+      - t3.small
+      - t3.medium
+    Default: t3.micro
+
+  WebTargetGroupPort:
+    Type: Number
+    Description: Port for the target group
+    Default: 80
+
+  WebListenerPort:
+    Type: Number
+    Description: Port for the load balancer listener
+    Default: 80
+
+  MinSize:
+    Type: Number
+    Description: Minimum size of the Auto Scaling group
+    Default: 2
+
+  MaxSize:
+    Type: Number
+    Description: Maximum size of the Auto Scaling group
+    Default: 3
+
+  DesiredCapacity:
+    Type: Number
+    Description: Desired capacity of the Auto Scaling group
+    Default: 2
+
+Resources:
+  # Custom Resource to capture the AMI ID from the Wrapper Lambda Function
+  CreateAmiCustomResource:
+    Type: Custom::CreateAmi
+    Properties:
+      ServiceToken: !ImportValue app-WrappingLambdaFunctionArn
+      ServiceTimeout: 300
+      LambdaFunctionName: !ImportValue app-CreateAmiFunctionName
+      InstanceId: !ImportValue web-WebTierInstanceId
+      ImageName: !Sub 'web-tier-image'
+
+  # Create a Launch Template from the AMI
+  WebLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub 'web-tier-launch-template'
+      LaunchTemplateData:
+        ImageId: !GetAtt CreateAmiCustomResource.ImageId
+        InstanceType: !Ref InstanceType
+        SecurityGroupIds:
+          - !ImportValue core-infrastructure-PublicInstanceSGId
+        IamInstanceProfile:
+          Name: !ImportValue web-WebProfile
+
+  # Target Group
+  WebTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${NamingPrefix}-target-group'
+      Protocol: HTTP
+      Port: !Ref WebTargetGroupPort
+      VpcId: !ImportValue core-infrastructure-VPCId
+      TargetType: instance
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /
+      HealthCheckPort: traffic-port
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+
+  # Load Balancer
+  WebLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${NamingPrefix}-public-alb'
+      Scheme: internet-facing
+      Subnets:
+        - !ImportValue core-infrastructure-PublicSubnet1Id
+        - !ImportValue core-infrastructure-PublicSubnet2Id
+      SecurityGroups:
+        - !ImportValue core-infrastructure-PublicLoadBalancerSG
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+
+  # Listener
+  WebListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref WebLoadBalancer
+      Port: !Ref WebListenerPort
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WebTargetGroup
+
+  # HTTPS Listener
+  #  WebHttpsListener:
+  #    Type: AWS::ElasticLoadBalancingV2::Listener
+  #    Properties:
+  #      LoadBalancerArn: !Ref WebLoadBalancer
+  #      Port: 443
+  #      Protocol: HTTPS
+  #      Certificates:
+  #        - CertificateArn: !Ref CertificateArn
+  #      DefaultActions:
+  #        - Type: forward
+  #          TargetGroupArn: !Ref WebTargetGroup
+
+  # Auto Scaling Group
+  WebAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub '${NamingPrefix}-asg'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WebLaunchTemplate
+        Version: !GetAtt WebLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !ImportValue core-infrastructure-PublicSubnet1Id
+        - !ImportValue core-infrastructure-PublicSubnet2Id
+      TargetGroupARNs:
+        - !Ref WebTargetGroup
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: !Sub '${NamingPrefix}-web-instance'
+          PropagateAtLaunch: true
+
+Outputs:
+  LoadBalancerDNSName:
+    Description: DNS name of the public load balancer
+    Value: !GetAtt WebLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-WebLoadBalancerDNSName'
+
+  TargetGroupArn:
+    Description: ARN of the target group
+    Value: !Ref WebTargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-WebTargetGroupArn'
+
+  AutoScalingGroupName:
+    Description: Name of the Auto Scaling group
+    Value: !Ref WebAutoScalingGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-WebAutoScalingGroupName'
+
+  LaunchTemplateId:
+    Description: The Launch Template ID of the web tier
+    Value: !Ref WebLaunchTemplate
+    Export:
+      Name: !Sub 'web-WebLaunchTemplateId'
+
+  LaunchTemplateVersion:
+    Description: The version of the Launch Template
+    Value: !GetAtt WebLaunchTemplate.LatestVersionNumber
+    Export:
+      Name: !Sub 'web-WebLaunchTemplateVersion'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Web Tier Load Balancer and Auto Scaling Configuration"
+        Parameters:
+          - NamingPrefix
+          - CertificateArn
+          - InstanceType
+          - WebTargetGroupPort
+          - WebListenerPort
+          - MinSize
+          - MaxSize
+          - DesiredCapacity
+    ParameterLabels:
+      NamingPrefix:
+        default: "Naming Prefix"
+      CertificateArn:
+        default: "SSL Certificate ARN"
+      InstanceType:
+        default: "Instance Type"
+      WebTargetGroupPort:
+        default: "Target Group Port"
+      WebListenerPort:
+        default: "Listener Port"
+      MinSize:
+        default: "Minimum Auto Scaling Group Size"
+      MaxSize:
+        default: "Maximum Auto Scaling Group Size"
+      DesiredCapacity:
+        default: "Desired Auto Scaling Group Size"
+```
+
+### Congratulations!
+
+You've just deployed your 3-tier application on AWS, all using CloudFormation stacks (automated) while following the [6 Pillars of the AWS Well-Architected Framework](https://aws.amazon.com/architecture/well-architected/).
+
+For more information, refer to the in-depth report which I’ve created: [Bhishman Desai's Detailed Report](https://github.com/bhishman-desai/aws-cloud-architecture/blob/main/report/Bhishman_Desai.pdf).
+
+Link to the [Source Code](https://github.com/bhishman-desai/aws-cloud-architecture).
+
+## Happy Architecting 📐✏️👷‍♀️
